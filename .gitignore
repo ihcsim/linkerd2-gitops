@@ -1,0 +1,4 @@
+**.swp
+*.kubeconfig
+linkerd/tls/*.crt
+linkerd/tls/*.key

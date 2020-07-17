@@ -1,9 +1,10 @@
+KIND_CLUSTER_NAME ?= linkerd
 KIND_KUBECONFIG ?= /home/isim/.kube/config
 
 PROJECT_REPO := https://github.com/ihcsim/linkerd2-gitops.git
 K8S_URL ?= https://kubernetes.default.svc
 
-KUBE_SYSTEM_NAMESPACE ?= "kube-system" # for cert-manager
+KUBE_SYSTEM_NAMESPACE ?= kube-system # for cert-manager
 
 ARGOCD_NAMESPACE ?= argocd
 ARGOCD_ADMIN_ACCOUNT ?= admin
@@ -15,6 +16,7 @@ CERT_MANAGER_PROJECT_NAME ?= cert-manager
 LINKERD_CHART_FILE ?= ./linkerd/manual-mtls/install.yaml
 LINKERD_CHART_URL ?= linkerd/linkerd2
 LINKERD_NAMESPACE ?= linkerd
+LINKERD_PLUGIN_NAME ?= linkerd
 LINKERD_PROJECT_NAME ?= linkerd
 
 ##############################
@@ -59,7 +61,7 @@ argocd-dashboard:
 ##############################
 linkerd-project:
 	argocd proj create "${LINKERD_PROJECT_NAME}" \
-		-d https://kubernetes.default.svc,"${KUBE_SYSTEM_NAMESPACE}" \ # for cert-manager \
+		-d https://kubernetes.default.svc,"${KUBE_SYSTEM_NAMESPACE}" \
 		-d https://kubernetes.default.svc,"${LINKERD_NAMESPACE}" \
 		-d https://kubernetes.default.svc,"${CERT_MANAGER_NAMESPACE}" \
 		-s "${PROJECT_REPO}"
@@ -146,27 +148,38 @@ linkerd-test:
 	linkerd inject https://run.linkerd.io/emojivoto.yml | kubectl apply -f -
 	linkerd check --proxy
 
-##############################
-######## Linkerd Helm ########
-##############################
+###################################
+######## Linkerd Auto MTLS ########
+###################################
 linkerd-pull:
 	helm repo update
 	rm -rf linkerd/auto-mtls
 	helm pull linkerd/linkerd2 -d linkerd/auto-mtls --untar
 
-argocd-install-with-plugin:
+linkerd-mtls-install-argocd:
 	KUBECONFIG="${KIND_KUBECONFIG}" \
 	kubectl create namespace "${ARGOCD_NAMESPACE}"
 
 	KUBECONFIG="${KIND_KUBECONFIG}" \
 	kubectl -n "${ARGOCD_NAMESPACE}" apply -k ./argocd
 
-linkerd-create-with-plugin:
-	argocd app create "${LINKERD_PROJECT_NAME}" \
-		--config-management-plugin "${LINKERD_PROJECT_NAME}" \
+linkerd-mtls-bootstrap:
+	argocd app create "${LINKERD_PROJECT_NAME}-bootstrap" \
 		--dest-namespace "${LINKERD_NAMESPACE}" \
 		--dest-server "${K8S_URL}" \
-		--path ./linkerd \
+		--path ./linkerd/auto-mtls/bootstrap \
+		--project "${LINKERD_PROJECT_NAME}" \
+		--repo "${PROJECT_REPO}"
+
+linkerd-mtls-bootstrap-sync:
+	argocd app sync "${LINKERD_PROJECT_NAME}"-bootstrap
+
+linkerd-mtls-create:
+	argocd app create "${LINKERD_PROJECT_NAME}" \
+		--config-management-plugin "${LINKERD_PLUGIN_NAME}" \
+		--dest-namespace "${LINKERD_NAMESPACE}" \
+		--dest-server "${K8S_URL}" \
+		--path ./linkerd/auto-mtls/linkerd2 \
 		--project "${LINKERD_PROJECT_NAME}" \
 		--repo "${PROJECT_REPO}"
 

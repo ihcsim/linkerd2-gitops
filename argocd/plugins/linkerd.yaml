@@ -8,14 +8,11 @@ metadata:
 data:
   configManagementPlugins: |
     - name: linkerd
-      init:
-        command: ["/bin/sh", "-c"]
-        args: ["kubectl apply -f auto-mtls/linkerd-mtls.yaml"]
       generate:
         command: ["/bin/sh", "-c"]
         args:
         - |
-          helm template linkerd2 auto-mtls/linkerd2 \
+          helm template linkerd2 . \
             -n linkerd \
             --set global.identityTrustAnchorsPEM=`kubectl -n linkerd get secret linkerd-trust-anchor -ojsonpath="{.data['ca.crt']}"` \
             --set identity.issuer.scheme=kubernetes.io/tls \

@@ -2,3 +2,4 @@
 *.kubeconfig
 linkerd/**/*.crt
 linkerd/**/*.key
+**/*.pem

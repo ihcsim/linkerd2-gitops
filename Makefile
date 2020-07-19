@@ -131,7 +131,9 @@ linkerd:
 	argocd app create "${LINKERD_PROJECT_NAME}" \
 		--dest-namespace "${LINKERD_NAMESPACE}" \
 		--dest-server "${K8S_URL}" \
-		--helm-set global.identityTrustAnchorsPEM=$(shell kubectl -n linkerd get secret linkerd-trust-anchor -ojsonpath="{.data['ca\.crt']}") \
+		--helm-set global.identityTrustAnchorsPEM="`kubectl -n linkerd get secret linkerd-trust-anchor -ojsonpath="{.data['ca\.crt']}" | base64 -d -`" \
+		--helm-set identity.issuer.scheme=kubernetes.io/tls \
+		--helm-set installNamespace=false \
 		--path ./linkerd/linkerd2 \
 		--project "${LINKERD_PROJECT_NAME}" \
 		--repo "${PROJECT_REPO}"

@@ -3,13 +3,22 @@ kind: Namespace
 metadata:
   name: linkerd
 ---
+apiVersion: bitname.com/v1alpha1
+kind: SealedSecret
+metadata:
+  name: linkerd-trust-anchor-sealed
+  namespace: linkerd
+spec:
+  encryptedData:
+---
 apiVersion: cert-manager.io/v1alpha2
 kind: Issuer
 metadata:
   name: linkerd-trust-anchor
   namespace: linkerd
 spec:
-  selfSigned: {}
+  ca:
+    secretName: linkerd-trust-anchor-sealed
 ---
 apiVersion: cert-manager.io/v1alpha2
 kind: Certificate

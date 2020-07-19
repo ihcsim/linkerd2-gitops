@@ -11,12 +11,16 @@ ARGOCD_ADMIN_ACCOUNT ?= admin
 ARGOCD_ADMIN_PASSWORD ?=
 
 CERT_MANAGER_NAMESPACE ?= cert-manager
-CERT_MANAGER_PROJECT_NAME ?= cert-manager
+CERT_MANAGER_APP_NAME ?= cert-manager
 
+LINKERD_APP_NAME ?= linkerd
 LINKERD_CHART_URL ?= linkerd/linkerd2
 LINKERD_NAMESPACE ?= linkerd
 LINKERD_PLUGIN_NAME ?= linkerd
 LINKERD_PROJECT_NAME ?= linkerd
+
+SEALED_SECRETS_APP_NAME ?= sealed-secrets
+SEALED_SECRETS_NAMESPACE ?= kube-system
 
 ##############################
 ########### Kind #############
@@ -93,8 +97,9 @@ linkerd-project-rbac:
 ##############################
 ######## CertManager #########
 ##############################
+.PHONY: cert-manager
 cert-manager:
-	argocd app create "${CERT_MANAGER_PROJECT_NAME}" \
+	argocd app create "${CERT_MANAGER_APP_NAME}" \
 	 --dest-namespace "${CERT_MANAGER_NAMESPACE}" \
 	 --dest-server "${K8S_URL}" \
 	 --path ./cert-manager \
@@ -102,10 +107,25 @@ cert-manager:
 	 --repo "${PROJECT_REPO}"
 
 cert-manager-sync:
-	argocd app sync "${CERT_MANAGER_PROJECT_NAME}"
+	argocd app sync "${CERT_MANAGER_APP_NAME}"
 
 cert-manager-check:
 	kubectl -n ${CERT_MANAGER_NAMESPACE} get po
+
+#######################################
+############ Sealed Secrets ###########
+#######################################
+.PHONY: sealed-secrets
+sealed-secrets:
+	argocd app create "${SEALED_SECRETS_APP_NAME}" \
+	 --dest-namespace "${SEALED_SECRETS_NAMESPACE}" \
+	 --dest-server "${K8S_URL}" \
+	 --path ./sealed-secrets \
+	 --project "${LINKERD_PROJECT_NAME}" \
+	 --repo "${PROJECT_REPO}"
+
+sealed-secrets-sync:
+	argocd app sync "${SEALED_SECRETS_APP_NAME}"
 
 ##############################
 ########## Linkerd ###########
@@ -115,7 +135,21 @@ linkerd-pull:
 	rm -rf linkerd/linkerd2
 	helm pull linkerd/linkerd2 -d ./linkerd --untar
 
-linkerd-mtls-bootstrap:
+linkerd-tls:
+	rm -f linkerd/tls/*.crt linkerd/tls/*.key
+	step certificate create identity.linkerd.cluster.local linkerd/tls/sample-trust.crt linkerd/tls/sample-trust.key \
+		--profile root-ca \
+		--no-password \
+		--insecure
+	step certificate create identity.linkerd.cluster.local linkerd/tls/sample-issuer.crt linkerd/tls/sample-issuer.key \
+		--ca linkerd/tls/sample-trust.crt \
+		--ca-key linkerd/tls/sample-trust.key \
+		--profile intermediate-ca \
+		--not-after 8760h \
+		--no-password \
+		--insecure
+
+linkerd-bootstrap:
 	argocd app create "${LINKERD_PROJECT_NAME}-bootstrap" \
 		--dest-namespace "${LINKERD_NAMESPACE}" \
 		--dest-server "${K8S_URL}" \
@@ -123,12 +157,12 @@ linkerd-mtls-bootstrap:
 		--project "${LINKERD_PROJECT_NAME}" \
 		--repo "${PROJECT_REPO}"
 
-linkerd-mtls-bootstrap-sync:
+linkerd-bootstrap-sync:
 	argocd app sync "${LINKERD_PROJECT_NAME}"-bootstrap
 
 .PHONY: linkerd
 linkerd:
-	argocd app create "${LINKERD_PROJECT_NAME}" \
+	argocd app create "${LINKERD_APP_NAME}" \
 		--dest-namespace "${LINKERD_NAMESPACE}" \
 		--dest-server "${K8S_URL}" \
 		--helm-set global.identityTrustAnchorsPEM="`kubectl -n linkerd get secret linkerd-trust-anchor -ojsonpath="{.data['ca\.crt']}" | base64 -d -`" \
@@ -139,7 +173,7 @@ linkerd:
 		--repo "${PROJECT_REPO}"
 
 linkerd-sync:
-	argocd app sync "${LINKERD_PROJECT_NAME}"
+	argocd app sync "${LINKERD_APP_NAME}"
 
 linkerd-test:
 	linkerd check
@@ -150,10 +184,10 @@ linkerd-test:
 ########## Clean up ##########
 ##############################
 cert-manager-uninstall:
-	argocd app delete "${CERT_MANAGER_PROJECT_NAME}" --cascade
+	argocd app delete "${CERT_MANAGER_APP_NAME}" --cascade
 
 linkerd-uninstall:
-	argocd app delete "${LINKERD_PROJECT_NAME}" --cascade
+	argocd app delete "${LINKERD_APP_NAME}" --cascade
 
 argocd-uninstall:
 	kubectl delete ns "${ARGOCD_NAMESPACE}"

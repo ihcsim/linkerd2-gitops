@@ -13,6 +13,9 @@ ARGOCD_ADMIN_PASSWORD ?=
 CERT_MANAGER_NAMESPACE ?= cert-manager
 CERT_MANAGER_APP_NAME ?= cert-manager
 
+EMOJIVOTO_APP_NAME ?= emojivoto
+EMOJIVOTO_NAMESPACE ?= emojivoto
+
 LINKERD_APP_NAME ?= linkerd
 LINKERD_CHART_URL ?= linkerd/linkerd2
 LINKERD_NAMESPACE ?= linkerd
@@ -176,7 +179,7 @@ linkerd:
 	argocd app create "${LINKERD_APP_NAME}" \
 		--dest-namespace "${LINKERD_NAMESPACE}" \
 		--dest-server "${K8S_URL}" \
-		--helm-set global.identityTrustAnchorsPEM="`kubectl -n linkerd get secret linkerd-trust-anchor -ojsonpath="{.data['ca\.crt']}" | base64 -d -`" \
+		--helm-set global.identityTrustAnchorsPEM="`kubectl -n linkerd get secret linkerd-trust-anchor -ojsonpath="{.data['tls\.crt']}" | base64 -d -`" \
 		--helm-set identity.issuer.scheme=kubernetes.io/tls \
 		--helm-set installNamespace=false \
 		--path ./linkerd/linkerd2 \
@@ -188,8 +191,22 @@ linkerd-sync:
 
 linkerd-test:
 	linkerd check
-	linkerd inject https://run.linkerd.io/emojivoto.yml | kubectl apply -f -
 	linkerd check --proxy
+
+##############################
+######### Emojivoto ##########
+##############################
+PHONY .emojivoto
+emojivoto:
+	argocd app create "${EMOJIVOTO_APP_NAME}" \
+		--dest-namespace "${EMOJIVOTO_NAMESPACE}" \
+		--dest-server "${K8S_URL}" \
+		--path ./emojivoto \
+		--project "${LINKERD_PROJECT_NAME}" \
+		--repo "${PROJECT_REPO}"
+
+emojivoto-sync:
+	argocd app sync "${EMOJIVOTO_APP_NAME}"
 
 ##############################
 ########## Clean up ##########

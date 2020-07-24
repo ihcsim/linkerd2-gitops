@@ -12,19 +12,13 @@ The scripts are tested with the following software:
 
 Highlights:
 
-* Version control Linkerd control plane YAML so that you have full visibility
-  into the workloads and changes between versions
-* Let Argo CD manage Linkerd control plane lifecycle by synchronizing your
-  live workloads with your version control system (i.e. single source of truth)
-    * Showcase how the upgrade workflow is made easy
-* Define Argo CD _projects_ to manage bootstrap dependencies
-    * Projects are also used to limit access to servers, namespaces and
-      resources
-* Use sealed-secrets to manage the encryption and auto-decryption of the mTLS
-  trust anchor
-* Let cert-manager manage the mTLS issuer key/cert lifecycle
-* Utilize Linkerd auto proxy injection feature to add applications to the mesh
-  in a GitOps workflow
+* Let Argo CD manage Linkerd control plane install and upgrade lifecycle
+* Use Argo CD _projects_ to manage bootstrap dependencies and limit access to
+  servers, namespaces and resources
+* Use sealed-secrets to encrypt and auto-decrypt the mTLS trust anchor
+* Let cert-manager manage the mTLS issuer key/cert assets
+* Utilize Linkerd auto proxy injection in a GitOps workflow to auto mesh
+  applications
 
 Why Argo CD?
 

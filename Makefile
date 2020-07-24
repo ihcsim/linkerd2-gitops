@@ -67,9 +67,10 @@ argocd-dashboard:
 ##############################
 linkerd-project:
 	argocd proj create "${LINKERD_PROJECT_NAME}" \
+		-d https://kubernetes.default.svc,"${CERT_MANAGER_NAMESPACE}" \
+		-d https://kubernetes.default.svc,"${EMOJIVOTO_NAMESPACE}" \
 		-d https://kubernetes.default.svc,"${KUBE_SYSTEM_NAMESPACE}" \
 		-d https://kubernetes.default.svc,"${LINKERD_NAMESPACE}" \
-		-d https://kubernetes.default.svc,"${CERT_MANAGER_NAMESPACE}" \
 		-s "${PROJECT_REPO}"
 
 linkerd-project-rbac:
@@ -196,7 +197,7 @@ linkerd-test:
 ##############################
 ######### Emojivoto ##########
 ##############################
-PHONY .emojivoto
+.PHONY: emojivoto
 emojivoto:
 	argocd app create "${EMOJIVOTO_APP_NAME}" \
 		--dest-namespace "${EMOJIVOTO_NAMESPACE}" \
@@ -207,6 +208,14 @@ emojivoto:
 
 emojivoto-sync:
 	argocd app sync "${EMOJIVOTO_APP_NAME}"
+
+##############################
+########## Upgrade ###########
+##############################
+linkerd-upgrade-to-edge:
+	helm repo update
+	rm -rf ./linkerd/linkerd2
+	helm pull linkerd-edge/linkerd2 -d ./linkerd --untar
 
 ##############################
 ########## Clean up ##########

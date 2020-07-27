@@ -56,7 +56,10 @@ argocd login 127.0.0.1:8080 \
   --password="`kubectl -n argocd get pods -l app.kubernetes.io/name=argocd-server -o name | cut -d'/' -f 2`" \
   --insecure
 
-argocd account update-password --account=admin --current-password="$(kubectl -n argocd get pods -l app.kubernetes.io/name=argocd-server -o name | cut -d'/' -f 2)" --new-password=some-new-password
+argocd account update-password \
+  --account=admin \
+  --current-password="$(kubectl -n argocd get pods -l app.kubernetes.io/name=argocd-server -o name | cut -d'/' -f 2)" \
+  --new-password=some-new-password
 ```
 
 The Argo CD dashboard is now accessible at https://localhost:8080/ using the
@@ -66,7 +69,7 @@ new `admin` password.
 
 Add the `k8s-remote` cluster access configuration to Argo CD. The `k8s-remote`
 cluster is where Linkerd and other applications will be deployed. The context of
-this cluster must be defined in your active kubeconfig.
+this cluster must be defined in your kubeconfig.
 
 ```sh
 argocd cluster add k8s-remote
@@ -189,9 +192,9 @@ Create the `linkerd-bootstrap` application to pre-create the mTLS trust anchor
 and issuer resources:
 
 ```sh
-kubectl --context="${TARGET_CONTEXT}" create namespace linkerd
+kubectl --context=k8s-remote create namespace linkerd
 
-kubectl --context="${TARGET_CONTEXT}" apply -f linkerd/tls/encrypted.yaml
+kubectl --context=k8s-remote apply -f linkerd/tls/encrypted.yaml
 
 TARGET_ENDPOINT=`argocd cluster list -ojson | jq -r '.[] | select(.name=="k8s-remote") | .server'`
 
@@ -238,7 +241,7 @@ argocd app create linkerd \
   --project linkerd \
   --repo https://github.com/ihcsim/linkerd2-gitops.git
 
-argocd app sync "${LINKERD_APP_NAME}"
+argocd app sync linkerd
 
 linkerd --context=k8s-remote check
 

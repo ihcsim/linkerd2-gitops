@@ -5,27 +5,27 @@ This project contains scripts and instructions to manage
 
 The scripts are tested with the following software:
 
-1. Kubernetes v1.18.0
-  1. kubectl v1.18.0
-1. Linkerd 2.8.1
-1. Argo CD v1.6.1+159674e
+1. [kind](https://kind.sigs.k8s.io/) v0.8.1
+1. [Linkerd](https://linkerd.io/) 2.8.1
+1. [Argo CD](https://argoproj.github.io/argo-cd/) v1.6.1+159674e
 
 ## Highlights
 
 * Automate the Linkerd control plane install and upgrade lifecycle using Argo CD
-* Incorporate Linkerd auto proxy injection into a GitOps workflow to auto mesh
-  applications
+* Incorporate Linkerd auto proxy injection feature into a GitOps workflow to
+  auto mesh applications
 * Separate control cluster from workload cluster
 * Securely store the mTLS trust anchor key/cert with offline encryption and
   real time auto-decryption using sealed-secrets
-* Utilize Argo CD _projects_ to manage bootstrap dependencies and limit access
-  to servers, namespaces and resources
+* Utilize Argo CD [projects](https://argoproj.github.io/argo-cd/user-guide/projects/)
+  to manage bootstrap dependencies and limit access to servers, namespaces and
+  resources
 * Let cert-manager manage the mTLS issuer key/cert assets
 
 ## Getting Started
 
 ### Create the control cluster
-Create a KinD cluster named `linkerd`:
+Create a `kind` cluster named `linkerd`:
 
 ```sh
 kind create cluster --name=linkerd
@@ -37,6 +37,7 @@ Install Argo CD:
 
 ```sh
 kubectl --context=kind-linkerd create namespace argocd
+
 kubectl --context=kind-linkerd -n argocd apply -f ./argocd
 ```
 
@@ -55,7 +56,7 @@ argocd login 127.0.0.1:8080 \
   --password="`kubectl -n argocd get pods -l app.kubernetes.io/name=argocd-server -o name | cut -d'/' -f 2`" \
   --insecure
 
-argocd account update-password --account=admin --current-password="$(shell kubectl -n argocd get pods -l app.kubernetes.io/name=argocd-server -o name | cut -d'/' -f 2)" --new-password=some-new-password
+argocd account update-password --account=admin --current-password="$(kubectl -n argocd get pods -l app.kubernetes.io/name=argocd-server -o name | cut -d'/' -f 2)" --new-password=some-new-password
 ```
 
 The Argo CD dashboard is now accessible at https://localhost:8080/ using the
@@ -77,6 +78,7 @@ Set up the `linkerd` project:
 
 ```sh
 TARGET_ENDPOINT=`argocd cluster list -ojson | jq -r '.[] | select(.name=="k8s-remote") | .server'`
+
 argocd proj create linkerd \
   -d "${TARGET_ENDPOINT}",cert-manager \
   -d "${TARGET_ENDPOINT}",emojivoto \
@@ -117,7 +119,7 @@ argocd proj allow-cluster-resource linkerd \
 
 ### Deploy the application workloads
 
-Deploy and sync cert-manager:
+Deploy and sync [cert-manager](https://cert-manager.io/docs/):
 
 ```sh
 TARGET_ENDPOINT=`argocd cluster list -ojson | jq -r '.[] | select(.name=="k8s-remote") | .server'`
@@ -137,7 +139,7 @@ Confirm that cert-manager is running:
 kubectl --context=k8s-remote -n cert-manager get po
 ```
 
-Deploy sealed-secrets:
+Deploy [sealed-secrets](https://github.com/bitnami-labs/sealed-secrets):
 
 ```sh
 TARGET_ENDPOINT=`argocd cluster list -ojson | jq -r '.[] | select(.name=="k8s-remote") | .server'`
@@ -152,6 +154,8 @@ argocd app create sealed-secrets \
 argocd app sync sealed-secrets
 ```
 
+### Prepare the Linkerd mTLS trust anchor
+
 Create and encrypt the mTLS trust anchor offline:
 
 ```sh
@@ -161,15 +165,6 @@ step certificate create identity.linkerd.cluster.local linkerd/tls/sample-trust.
   --profile root-ca \
   --no-password \
   --insecure
-
-step certificate create identity.linkerd.cluster.local linkerd/tls/sample-issuer.crt linkerd/tls/sample-issuer.key \
-  --ca linkerd/tls/sample-trust.crt \
-  --ca-key linkerd/tls/sample-trust.key \
-  --profile intermediate-ca \
-  --not-after 8760h \
-  --no-password \
-  --insecure
-
 
 kubectl -n linkerd create secret tls linkerd-trust-anchor \
   --cert linkerd/tls/sample-trust.crt \
@@ -181,23 +176,13 @@ kubectl -n linkerd create secret tls linkerd-trust-anchor \
 
 Patch the encrypted secret with the Linkerd annotations and labels:
 ```sh
-SECRET="`cat linkerd/tls/encrypted.yaml`" ; echo "$${SECRET}" | \
+cat linkerd/tls/encrypted.yaml | \
   kubectl patch -f - \
     -p '{"spec": {"template": {"type":"kubernetes.io/tls", "metadata": {"labels": {"linkerd.io/control-plane-component":"identity", "linkerd.io/control-plane-ns":"linkerd"}, "annotations": {"linkerd.io/created-by":"linkerd/cli stable-2.8.1", "linkerd.io/identity-issuer-expiry":"2021-07-19T20:51:01Z"}}}}}' \
     --dry-run=client \
     --type=merge \
     --local -oyaml > \
       linkerd/tls/encrypted.yaml
-```
-
-Retrieve and untar the Linked Helm chart:
-
-```sh
-helm repo update
-
-rm -rf linkerd/linkerd2
-
-helm pull linkerd/linkerd2 -d ./linkerd --untar
 ```
 
 Create the `linkerd-bootstrap` application to pre-create the mTLS trust anchor
@@ -226,7 +211,19 @@ Confirm that all the mTLS secrets are created:
 kubectl --context=k8s-remote -n linkerd get secret,issuer,certificates
 ```
 
-Deploy Linkerd:
+### Deploy Linkerd
+
+Retrieve and untar the Linked Helm chart:
+
+```sh
+helm repo update
+
+rm -rf linkerd/linkerd2
+
+helm pull linkerd/linkerd2 -d ./linkerd --untar
+```
+
+Create the `linkerd` application:
 
 ```sh
 TARGET_ENDPOINT=`argocd cluster list -ojson | jq -r '.[] | select(.name==k8s-remote) | .server'`
@@ -249,6 +246,7 @@ linkerd --context=k8s-remote check --proxy
 ```
 
 Deploy emojivoto to test auto proxy injection:
+
 ```sh
 TARGET_ENDPOINT=`argocd cluster list -ojson | jq -r '.[] | select(.name==k8s-remote) | .server'`
 

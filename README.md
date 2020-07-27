@@ -12,16 +12,12 @@ The scripts are tested with the following software:
 
 Highlights:
 
-* Let Argo CD manage Linkerd control plane install and upgrade lifecycle
-* Use Argo CD _projects_ to manage bootstrap dependencies and limit access to
-  servers, namespaces and resources
-* Use sealed-secrets to encrypt and auto-decrypt the mTLS trust anchor
+* Automate the Linkerd control plane install and upgrade lifecycle using Argo CD
+* Separate control cluster from workload cluster
+* Securely store the mTLS trust anchor key/cert with offline encryption and
+  real tim auto-decryption using sealed-secrets
+* Utilize Argo CD _projects_ to manage bootstrap dependencies and limit access
+  to servers, namespaces and resources
 * Let cert-manager manage the mTLS issuer key/cert assets
 * Utilize Linkerd auto proxy injection in a GitOps workflow to auto mesh
   applications
-
-Why Argo CD?
-
-* Can handle multiple repositories
-* Extensiblity via [plugins](https://argoproj.github.io/argo-cd/user-guide/config-management-plugins/)
-* More common among Linkerd community members

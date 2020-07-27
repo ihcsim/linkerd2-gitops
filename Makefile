@@ -2,9 +2,6 @@ KIND_CLUSTER_NAME ?= linkerd
 KIND_KUBECONFIG ?= /home/isim/.kube/config
 
 PROJECT_REPO := https://github.com/ihcsim/linkerd2-gitops.git
-K8S_URL ?= https://kubernetes.default.svc
-
-KUBE_SYSTEM_NAMESPACE ?= kube-system
 
 ARGOCD_NAMESPACE ?= argocd
 ARGOCD_ADMIN_ACCOUNT ?= admin
@@ -30,27 +27,21 @@ SEALED_SECRETS_NAMESPACE ?= kube-system
 ##############################
 kind:
 	kind create cluster --name "${KIND_CLUSTER_NAME}"
-	kind get kubeconfig --name="${KIND_CLUSTER_NAME}" > "${KIND_KUBECONFIG}"
-	KUBECONFIG="${KIND_KUBECONFIG}" \
-		kubectl cluster-info
+	kubectl --context="kind-${KIND_CLUSTER_NAME}" cluster-info
 
 ##############################
 ########## Argo CD ###########
 ##############################
+.PHONY: argocd
 argocd:
-	KUBECONFIG="${KIND_KUBECONFIG}" \
-	kubectl create namespace "${ARGOCD_NAMESPACE}"
-
-	KUBECONFIG="${KIND_KUBECONFIG}" \
-	kubectl -n "${ARGOCD_NAMESPACE}" apply -f ./argocd
+	kubectl --context="kind-${KIND_CLUSTER_NAME}" create namespace "${ARGOCD_NAMESPACE}"
+	kubectl --context="kind-${KIND_CLUSTER_NAME}" -n "${ARGOCD_NAMESPACE}" apply -f ./argocd
 
 argocd-port-forward:
-	KUBECONFIG="${KIND_KUBECONFIG}" \
-	kubectl -n "${ARGOCD_NAMESPACE}" \
+	kubectl --context="kind-${KIND_CLUSTER_NAME}" -n "${ARGOCD_NAMESPACE}" \
 		port-forward svc/argocd-server 8080:443  > /dev/null 2>&1 &
 
 argocd-login:
-	KUBECONFIG="${KIND_KUBECONFIG}" \
 	argocd login 127.0.0.1:8080 \
 		--username="${ARGOCD_ADMIN_ACCOUNT}" \
 		--password="`kubectl -n ${ARGOCD_NAMESPACE} get pods -l app.kubernetes.io/name=argocd-server -o name | cut -d'/' -f 2`" \
@@ -62,16 +53,29 @@ argocd-update-password:
 argocd-dashboard:
 	@echo "ArgoCD dashboard URL: https://localhost:8080/"
 
+###################################
+######### Target Cluster ##########
+###################################
+target-cluster:
+	@test -n "${TARGET_CLUSTER_NAME}" || (echo 'Missing variable: TARGET_CLUSTER_NAME'; exit 1)
+
+	argocd cluster add "${TARGET_CLUSTER_NAME}"
+	argocd cluster list
+
 ##############################
 ######### Project ############
 ##############################
 linkerd-project:
+	@test -n "${TARGET_CLUSTER_NAME}" || (echo 'Missing variable: TARGET_CLUSTER_NAME'; exit 1)
+
+	TARGET_ENDPOINT=`argocd cluster list -ojson | jq -r '.[] | select(.name=="${TARGET_CLUSTER_NAME}") | .server'` ; \
 	argocd proj create "${LINKERD_PROJECT_NAME}" \
-		-d https://kubernetes.default.svc,"${CERT_MANAGER_NAMESPACE}" \
-		-d https://kubernetes.default.svc,"${EMOJIVOTO_NAMESPACE}" \
-		-d https://kubernetes.default.svc,"${KUBE_SYSTEM_NAMESPACE}" \
-		-d https://kubernetes.default.svc,"${LINKERD_NAMESPACE}" \
+		-d "$${TARGET_ENDPOINT}","${CERT_MANAGER_NAMESPACE}" \
+		-d "$${TARGET_ENDPOINT}","${EMOJIVOTO_NAMESPACE}" \
+		-d "$${TARGET_ENDPOINT}",kube-system \
+		-d "$${TARGET_ENDPOINT}","${LINKERD_NAMESPACE}" \
 		-s "${PROJECT_REPO}"
+	argocd proj get "${LINKERD_PROJECT_NAME}"
 
 linkerd-project-rbac:
 	argocd proj allow-cluster-resource "${LINKERD_PROJECT_NAME}" \
@@ -103,9 +107,12 @@ linkerd-project-rbac:
 ##############################
 .PHONY: cert-manager
 cert-manager:
+	@test -n "${TARGET_CLUSTER_NAME}" || (echo 'Missing variable: TARGET_CLUSTER_NAME'; exit 1)
+
+	TARGET_ENDPOINT=`argocd cluster list -ojson | jq -r '.[] | select(.name=="${TARGET_CLUSTER_NAME}") | .server'` ; \
 	argocd app create "${CERT_MANAGER_APP_NAME}" \
 	 --dest-namespace "${CERT_MANAGER_NAMESPACE}" \
-	 --dest-server "${K8S_URL}" \
+	 --dest-server "$${TARGET_ENDPOINT}" \
 	 --path ./cert-manager \
 	 --project "${LINKERD_PROJECT_NAME}" \
 	 --repo "${PROJECT_REPO}"
@@ -114,16 +121,19 @@ cert-manager-sync:
 	argocd app sync "${CERT_MANAGER_APP_NAME}"
 
 cert-manager-check:
-	kubectl -n ${CERT_MANAGER_NAMESPACE} get po
+	kubectl --context="${TARGET_CONTEXT}" -n ${CERT_MANAGER_NAMESPACE} get po
 
 #######################################
 ############ Sealed Secrets ###########
 #######################################
 .PHONY: sealed-secrets
 sealed-secrets:
+	@test -n "${TARGET_CLUSTER_NAME}" || (echo 'Missing variable: TARGET_CLUSTER_NAME'; exit 1)
+
+	TARGET_ENDPOINT=`argocd cluster list -ojson | jq -r '.[] | select(.name=="${TARGET_CLUSTER_NAME}") | .server'` ; \
 	argocd app create "${SEALED_SECRETS_APP_NAME}" \
 	 --dest-namespace "${SEALED_SECRETS_NAMESPACE}" \
-	 --dest-server "${K8S_URL}" \
+	 --dest-server "$${TARGET_ENDPOINT}" \
 	 --path ./sealed-secrets \
 	 --project "${LINKERD_PROJECT_NAME}" \
 	 --repo "${PROJECT_REPO}"
@@ -154,20 +164,23 @@ linkerd-tls:
 		--insecure
 
 linkerd-encrypted-trust-anchor:
+	@test -n "${TARGET_CONTEXT}" || (echo 'Missing variable: TARGET_CONTEXT'; exit 1)
+
 	kubectl -n linkerd create secret tls linkerd-trust-anchor \
 		--cert linkerd/tls/sample-trust.crt \
 		--key linkerd/tls/sample-trust.key \
-		--dry-run=client -oyaml | kubeseal -oyaml - > linkerd/tls/encrypted.yaml
+		--dry-run=client -oyaml | kubeseal --context="${TARGET_CONTEXT}" -oyaml - > linkerd/tls/encrypted.yaml
 
 	SECRET="`cat linkerd/tls/encrypted.yaml`" ; echo "$${SECRET}" | kubectl patch -f - -p '{"spec": {"template": {"type":"kubernetes.io/tls", "metadata": {"labels": {"linkerd.io/control-plane-component":"identity", "linkerd.io/control-plane-ns":"linkerd"}, "annotations": {"linkerd.io/created-by":"linkerd/cli stable-2.8.1", "linkerd.io/identity-issuer-expiry":"2021-07-19T20:51:01Z"}}}}}' --dry-run=client --type=merge --local -oyaml > linkerd/tls/encrypted.yaml
 
 linkerd-bootstrap:
-	kubectl create namespace linkerd
-	kubectl apply -f linkerd/tls/encrypted.yaml
+	kubectl --context="${TARGET_CONTEXT}" create namespace linkerd
+	kubectl --context="${TARGET_CONTEXT}" apply -f linkerd/tls/encrypted.yaml
 
+	TARGET_ENDPOINT=`argocd cluster list -ojson | jq -r '.[] | select(.name=="${TARGET_CLUSTER_NAME}") | .server'` ; \
 	argocd app create "${LINKERD_PROJECT_NAME}-bootstrap" \
 		--dest-namespace "${LINKERD_NAMESPACE}" \
-		--dest-server "${K8S_URL}" \
+		--dest-server "$${TARGET_ENDPOINT}" \
 		--path ./linkerd/bootstrap \
 		--project "${LINKERD_PROJECT_NAME}" \
 		--repo "${PROJECT_REPO}"
@@ -177,10 +190,11 @@ linkerd-bootstrap-sync:
 
 .PHONY: linkerd
 linkerd:
+	TARGET_ENDPOINT=`argocd cluster list -ojson | jq -r '.[] | select(.name=="${TARGET_CLUSTER_NAME}") | .server'` ; \
 	argocd app create "${LINKERD_APP_NAME}" \
 		--dest-namespace "${LINKERD_NAMESPACE}" \
-		--dest-server "${K8S_URL}" \
-		--helm-set global.identityTrustAnchorsPEM="`kubectl -n linkerd get secret linkerd-trust-anchor -ojsonpath="{.data['tls\.crt']}" | base64 -d -`" \
+		--dest-server "$${TARGET_ENDPOINT}" \
+		--helm-set global.identityTrustAnchorsPEM="`kubectl --context=${TARGET_CLUSTER_NAME} -n linkerd get secret linkerd-trust-anchor -ojsonpath="{.data['tls\.crt']}" | base64 -d -`" \
 		--helm-set identity.issuer.scheme=kubernetes.io/tls \
 		--helm-set installNamespace=false \
 		--path ./linkerd/linkerd2 \
@@ -190,18 +204,19 @@ linkerd:
 linkerd-sync:
 	argocd app sync "${LINKERD_APP_NAME}"
 
-linkerd-test:
-	linkerd check
-	linkerd check --proxy
+linkerd-check:
+	linkerd --context="${TARGET_CONTEXT}" check
+	linkerd --context="${TARGET_CONTEXT}" check --proxy
 
 ##############################
 ######### Emojivoto ##########
 ##############################
 .PHONY: emojivoto
 emojivoto:
+	TARGET_ENDPOINT=`argocd cluster list -ojson | jq -r '.[] | select(.name=="${TARGET_CLUSTER_NAME}") | .server'` ; \
 	argocd app create "${EMOJIVOTO_APP_NAME}" \
 		--dest-namespace "${EMOJIVOTO_NAMESPACE}" \
-		--dest-server "${K8S_URL}" \
+		--dest-server "$${TARGET_ENDPOINT}" \
 		--path ./emojivoto \
 		--project "${LINKERD_PROJECT_NAME}" \
 		--repo "${PROJECT_REPO}"

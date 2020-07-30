@@ -1,0 +1,21 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: cert-manager-bootstrap
+  namespace: argocd
+spec:
+  project: demo
+  source:
+    path: ./cert-manager
+    repoURL: https://github.com/ihcsim/linkerd2-gitops
+  destination:
+    namespace: cert-manager
+    server: https://kubernetes.default.svc
+  syncPolicy:
+    syncOptions:
+    - Validate=false
+  ignoreDifferences:
+  - group: apiextensions.k8s.io
+    kind: CustomResourceDefinition
+    jsonPointers:
+    - /status

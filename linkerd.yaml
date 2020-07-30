@@ -1,0 +1,33 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: linkerd
+  namespace: argocd
+spec:
+  project: demo
+  source:
+    chart: linkerd2
+    repoURL: https://helm.linkerd.io/stable
+    targetRevision: 2.8.0
+    helm:
+      parameters:
+      - name: global.identityTrustAnchorsPEM
+        value: |
+          -----BEGIN CERTIFICATE-----
+          MIIBljCCATugAwIBAgIQIq4JN1YqsSEVeAn7W9eFMzAKBggqhkjOPQQDAjApMScw
+          JQYDVQQDEx5pZGVudGl0eS5saW5rZXJkLmNsdXN0ZXIubG9jYWwwHhcNMjAwNzMx
+          MDQyMTIzWhcNMzAwNzI5MDQyMTIzWjApMScwJQYDVQQDEx5pZGVudGl0eS5saW5r
+          ZXJkLmNsdXN0ZXIubG9jYWwwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAARfwvXY
+          BQRVbjIkxQO7kK1g1Kx2ajQXk/OVhWEv19CN6lNFwEuL4rbiH8JOIfvQLKcMHY1u
+          xCiTR1VsqSeGQjdzo0UwQzAOBgNVHQ8BAf8EBAMCAQYwEgYDVR0TAQH/BAgwBgEB
+          /wIBATAdBgNVHQ4EFgQUoH1rxs/wz+iW8FEtvhRjVN1w0r0wCgYIKoZIzj0EAwID
+          SQAwRgIhAIanbEihs11fTS5pL6qJSl6bl9xDZNLXAcWfxie+7L1vAiEAnGyrzGII
+          s9te9VoRWK0QueQFqQapCdtw/glLteYH2yU=
+          -----END CERTIFICATE-----
+      - name: identity.issuer.scheme
+        value: kubernetes.io/tls
+      - name: installNamespace
+        value: "false"
+  destination:
+    namespace: linkerd
+    server: https://kubernetes.default.svc

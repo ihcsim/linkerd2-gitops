@@ -1,5 +1,5 @@
 **.swp
 *.kubeconfig
-linkerd/**/*.crt
-linkerd/**/*.key
+**/*.crt
+**/*.key
 **/*.pem

@@ -12,21 +12,82 @@ The scripts are tested with the following software:
 ## Highlights
 
 * Automate the Linkerd control plane install and upgrade lifecycle using Argo CD
-* Incorporate Linkerd auto proxy injection feature into a GitOps workflow to
+* Incorporate Linkerd auto proxy injection feature into the GitOps workflow to
   auto mesh applications
 * Securely store the mTLS trust anchor key/cert with offline encryption and
   runtime auto-decryption using sealed-secrets
+* Let cert-manager manage the mTLS issuer key/cert assets
 * Utilize Argo CD [projects](https://argoproj.github.io/argo-cd/user-guide/projects/)
   to manage bootstrap dependencies and limit access to servers, namespaces and
   resources
-* Let cert-manager manage the mTLS issuer key/cert assets
+* Uses Argo CD
+  [_app of apps_ pattern](https://argoproj.github.io/argo-cd/operator-manual/cluster-bootstrapping/#app-of-apps-pattern)
+  to manage application declarative resources
 
 ## Getting Started
+
+### Create local K8s cluster
 
 Create a `kind` cluster named `linkerd`:
 
 ```sh
 kind create cluster --name=linkerd
+```
+
+### Set up a Git server
+
+Deploy the Git server to the `scm` namespace:
+
+```sh
+kubectl apply -f git-server.yaml
+```
+
+Confirm that the Git server is healthy:
+
+```sh
+kubectl -n scm rollout status deploy/git-server
+```
+
+> This runs the Git server as a [daemon](https://git-scm.com/book/en/v2/Git-on-the-Server-Git-Daemon)
+> with unauthenticated access to the Git data, over the `git` protocol.
+> This setup is not recommended for production usage.
+
+Set up the remote repository. This is the repository that Argo CD will watch:
+
+```sh
+git_server=`kubectl -n scm get po -l app=git-server -oname | awk -F/ '{ print $2 }'`
+
+kubectl -n scm exec "${git_server}" -- \
+  git clone --bare https://github.com/ihcsim/linkerd2-gitops.git
+```
+
+Confirm that the remote repository is cloned successfully:
+
+```sh
+kubectl -n scm exec "${git_server}" -- ls -al /git/linkerd2-gitops.git
+```
+
+Clone a local copy of the example repository. In later steps, changes will be
+made to this repository, and will be pushed to the remote in-cluster repository.
+
+```sh
+git clone https://github.com/ihcsim/linkerd2-gitops.git
+```
+
+Update the local repo with a remote that points to the Git server:
+
+```sh
+git remote add git-server git://localhost/linkerd2-gitops.git
+```
+
+Make sure that push works via port-forwarding:
+
+```sh
+kubectl -n scm port-forward "${git_server}" 9418  &
+
+cd ./linkerd2-gitopts
+
+git push git-server main
 ```
 
 ### Deploy Argo CD 1.6.1
@@ -55,7 +116,9 @@ kubectl -n argocd port-forward svc/argocd-server 8080:443  \
   > /dev/null 2>&1 &
 ```
 
-The Argo CD dashboard is now accessible at https://localhost:8080/
+The Argo CD dashboard is now accessible at https://localhost:8080/, using the
+default `admin` username and
+[password](https://argoproj.github.io/argo-cd/getting_started/#4-login-using-the-cli).
 
 > The default admin password is the auto-generated name of the Argo CD API
 > server pod. You can use the `argocd account update-password` command to
@@ -64,9 +127,11 @@ The Argo CD dashboard is now accessible at https://localhost:8080/
 Authenticte the Argo CD CLI:
 
 ```sh
+argocd_server=`kubectl -n argocd get pods -l app.kubernetes.io/name=argocd-server -o name | cut -d'/' -f 2`
+
 argocd login 127.0.0.1:8080 \
   --username=admin \
-  --password="`kubectl -n argocd get pods -l app.kubernetes.io/name=argocd-server -o name | cut -d'/' -f 2`" \
+  --password="${argocd_server}" \
   --insecure
 ```
 
@@ -119,9 +184,9 @@ EOF
 kubectl apply -f ./project.yaml
 ```
 
-> This restricts the project with permissions to deploy resources to the same
-> cluster that Argo CD is on.
-> To register separate remote clusters, use the `argocd cluster add` command.
+> The `demo` project is restricted to deploying resources to the same cluster
+> that Argo CD is on. To register separate remote clusters, use the
+> `argocd cluster add` command.
 
 Confirm that the project is deployed correctly:
 
@@ -132,14 +197,6 @@ argocd proj get demo
 On the dashboard:
 
 ![New project in dashboard](img/dashboard-project.png)
-
-Commit the `project.yaml` to Git:
-
-```sh
-git add ./project.yaml && \
-git commit -m "add demo project YAML" && \
-git push
-```
 
 ### Deploy cert-manager 0.15.0
 
@@ -195,17 +252,6 @@ Confirm that cert-manager is running:
 for deploy in "cert-manager" "cert-manager-cainjector" "cert-manager-webhook"; \
   do kubectl -n cert-manager rollout status deploy/${deploy}; \
 done
-```
-
-> Some resources like the CRDs will remind out-of-sync
-> See https://github.com/argoproj/argo-cd/issues/2239
-
-Commit the `cert-manager` YAML files to Git:
-
-```sh
-git add ./cert-manager.yaml && \
-git commit -m "add cert-manager 0.16.0 YAML" && \
-git push
 ```
 
 ### Deploy sealed-secrets 0.12.4

@@ -1,4 +1,5 @@
 # Linkerd GitOps
+
 This project contains scripts and instructions to manage
 [Linkerd](https://linkerd.io) in a GitOps workflow, using
 [Argo CD](https://argoproj.github.io/argo-cd/).
@@ -8,6 +9,8 @@ The scripts are tested with the following software:
 1. [kind](https://kind.sigs.k8s.io/) v0.8.1
 1. [Linkerd](https://linkerd.io/) 2.8.1
 1. [Argo CD](https://argoproj.github.io/argo-cd/) v1.6.1
+1. [cert-manager](https://cert-manager.io) 0.15.0
+1. [sealed-secrets](https://github.com/bitnami-labs/sealed-secrets) 0.12.4
 
 ## Highlights
 
@@ -39,8 +42,14 @@ kind create cluster --name=linkerd
 Deploy the Git server to the `scm` namespace:
 
 ```sh
-kubectl apply -f git-server.yaml
+kubectl apply -f deploy/git-server
 ```
+
+This Git server that will be used to host repositories that Argo Cd will watch.
+
+> This runs the Git server as a [daemon](https://git-scm.com/book/en/v2/Git-on-the-Server-Git-Daemon)
+> with unauthenticated access to the Git data, over the `git` protocol.
+> This setup is not recommended for production usage.
 
 Confirm that the Git server is healthy:
 
@@ -48,11 +57,7 @@ Confirm that the Git server is healthy:
 kubectl -n scm rollout status deploy/git-server
 ```
 
-> This runs the Git server as a [daemon](https://git-scm.com/book/en/v2/Git-on-the-Server-Git-Daemon)
-> with unauthenticated access to the Git data, over the `git` protocol.
-> This setup is not recommended for production usage.
-
-Set up the remote repository. This is the repository that Argo CD will watch:
+Set up the remote repository:
 
 ```sh
 git_server=`kubectl -n scm get po -l app=git-server -oname | awk -F/ '{ print $2 }'`
@@ -60,6 +65,9 @@ git_server=`kubectl -n scm get po -l app=git-server -oname | awk -F/ '{ print $2
 kubectl -n scm exec "${git_server}" -- \
   git clone --bare https://github.com/ihcsim/linkerd2-gitops.git
 ```
+
+Argo CD will sync changes made to this repository with workloads on the
+cluster.
 
 Confirm that the remote repository is cloned successfully:
 
@@ -166,6 +174,8 @@ spec:
   - group: rbac.authorization.k8s.io
     kind: ClusterRoleBinding
   destinations:
+  - namespace: argocd
+    server: https://kubernetes.default.svc
   - namespace: cert-manager
     server: https://kubernetes.default.svc
   - namespace: emojivoto
@@ -198,52 +208,45 @@ On the dashboard:
 
 ![New project in dashboard](img/dashboard-project.png)
 
-### Deploy cert-manager 0.15.0
+### Set up parent application
 
-Create the [cert-manager](https://cert-manager.io/docs/)
-[application](https://argoproj.github.io/argo-cd/operator-manual/declarative-setup/#applications):
+The `main`
+[application](https://argoproj.github.io/argo-cd/operator-manual/declarative-setup/#applications)
+is the parent application that manages all other applications. It follows the
+[app of apps pattern](https://argoproj.github.io/argo-cd/operator-manual/cluster-bootstrapping/#app-of-apps-pattern).
 
 ```sh
-cat<<EOF > ./cert-manager.yaml
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: cert-manager
----
-apiVersion: argoproj.io/v1alpha1
-kind: Application
-metadata:
-  name: cert-manager
-  namespace: argocd
-spec:
-  project: demo
-  source:
-    chart: cert-manager
-    repoURL: https://charts.jetstack.io
-    targetRevision: v0.15.0
-    helm:
-      parameters:
-      - name: installCRDs
-        value: "true"
-  destination:
-    namespace: cert-manager
-    server: https://kubernetes.default.svc
-  syncPolicy:
-    syncOptions:
-    - Validate=false
-  ignoreDifferences:
-  - group: apiextensions.k8s.io
-    kind: CustomResourceDefinition
-    jsonPointers:
-    - /status
-EOF
+kubectl apply -f main.yaml
+```
 
-kubectl apply -f ./cert-manager.yaml
+Confirm that the `main` application is deployed successfully:
 
+```sh
+argocd app get main
+```
+
+Sync the `main` application:
+
+```sh
+argocd app sync main
+```
+
+Confirm that the synchronziation completed successfully:
+
+![Sync the main application](img/dashboard-applications-main-sync.png)
+
+In the following steps, we will deploy each application by using Argo CD to
+synchronize them individually.
+
+### Deploy cert-manager
+
+Deploy cert-manager:
+
+```sh
 argocd app sync cert-manager
 ```
 
-> Can't use cert-manager v0.16.0 with kubectl <1.19 and Helm 3.2
+> Can't use cert-manager 0.16.0 with kubectl <1.19 and Helm 3.2
 > See https://cert-manager.io/docs/installation/upgrading/upgrading-0.15-0.16/#helm
 
 Confirm that cert-manager is running:
@@ -254,31 +257,11 @@ for deploy in "cert-manager" "cert-manager-cainjector" "cert-manager-webhook"; \
 done
 ```
 
-### Deploy sealed-secrets 0.12.4
+### Deploy sealed-secrets
 
-Deploy the [sealed-secrets](https://github.com/bitnami-labs/sealed-secrets)
-application:
+Deploy the sealed-secrets application:
 
 ```sh
-cat<<EOF > ./sealed-secrets.yaml
-apiVersion: argoproj.io/v1alpha1
-kind: Application
-metadata:
-  name: sealed-secrets
-  namespace: argocd
-spec:
-  destination:
-    namespace: kube-system
-    server: https://kubernetes.default.svc
-  project: demo
-  source:
-    chart: sealed-secrets
-    repoURL: https://kubernetes-charts.storage.googleapis.com
-    targetRevision: 1.10.3
-EOF
-
-kubectl apply -f ./sealed-secrets.yaml
-
 argocd app sync sealed-secrets
 ```
 
@@ -288,114 +271,43 @@ Confirm that sealed-secrets is running:
 kubectl -n kube-system rollout status deploy/sealed-secrets
 ```
 
-Commit the `sealed-secrets` YAML file to Git:
-
-```sh
-git add ./sealed-secrets.yaml && \
-git commit -m "add sealed-secrets 0.12.4 YAML" && \
-git push
-```
-
 ### Prepare the Linkerd mTLS trust anchor
 
 Create and encrypt the mTLS trust anchor offline:
 
 ```sh
-mkdir linkerd
+mkdir deploy/linkerd
 
-cat<<EOF > ./linkerd/namespace.yaml
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: linkerd
-EOF
-
-step certificate create identity.linkerd.cluster.local ./linkerd/sample-trust.crt ./linkerd/sample-trust.key \
+step certificate create identity.linkerd.cluster.local ./deploy/linkerd/sample-trust.crt ./deploy/linkerd/sample-trust.key \
   --profile root-ca \
   --no-password \
   --insecure
 
 kubectl -n linkerd create secret tls linkerd-trust-anchor \
-  --cert ./linkerd/sample-trust.crt \
-  --key ./linkerd/sample-trust.key \
+  --cert ./deploy/linkerd/sample-trust.crt \
+  --key ./deploy/linkerd/sample-trust.key \
   --dry-run=client -oyaml | \
 kubeseal --controller-name=sealed-secrets -oyaml - | \
 kubectl patch -f - \
   -p '{"spec": {"template": {"type":"kubernetes.io/tls", "metadata": {"labels": {"linkerd.io/control-plane-component":"identity", "linkerd.io/control-plane-ns":"linkerd"}, "annotations": {"linkerd.io/created-by":"linkerd/cli stable-2.8.1", "linkerd.io/identity-issuer-expiry":"2021-07-19T20:51:01Z"}}}}}' \
   --dry-run=client \
   --type=merge \
-  --local -oyaml > ./linkerd/trust-anchor.yaml
+  --local -oyaml > ./deploy/linkerd/trust-anchor.yaml
 ```
 
-Prepare the `Issuer` resources YAML:
+Commit and push the encrypted trust anchor secret to the Git server:
 
 ```sh
-cat <<EOF > ./linkerd/trust-issuer.yaml
-apiVersion: cert-manager.io/v1alpha2
-kind: Issuer
-metadata:
-  name: linkerd-trust-anchor
-  namespace: linkerd
-spec:
-  ca:
-    secretName: linkerd-trust-anchor
----
-apiVersion: cert-manager.io/v1alpha2
-kind: Certificate
-metadata:
-  name: linkerd-identity-issuer
-  namespace: linkerd
-spec:
-  secretName: linkerd-identity-issuer
-  duration: 24h0m0s
-  renewBefore: 1h0m0s
-  issuerRef:
-    name: linkerd-trust-anchor
-    kind: Issuer
-  commonName: identity.linkerd.cluster.local
-  isCA: true
-  keyAlgorithm: ecdsa
-  usages:
-  - cert sign
-  - crl sign
-  - server auth
-  - client auth
-EOF
+git add ./deploy/linkerd/trust-anchor.yaml
+
+git commit -m "add new trust anchor"
+
+git push git-server main
 ```
 
-Commit the Linkerd bootstrap resources to Git:
+Deploy the `linkerd-bootstrap` application:
 
 ```sh
-git add ./linkerd && \
-git commit -m "add Linkerd bootstrap resources" && \
-git push
-```
-
-> Every time the encrypted trust anchor is changed, its YAML must be committed
-> to git before sync-ing the `linkerd-bootstrap` application. The
-> sealed-secrets operator will always use the trust anchor in the scm.
-
-Create the `linkerd-bootstrap` application:
-
-```sh
-cat<<EOF > ./linkerd-bootstrap.yaml
-apiVersion: argoproj.io/v1alpha1
-kind: Application
-metadata:
-  name: linkerd-bootstrap
-  namespace: argocd
-spec:
-  destination:
-    namespace: linkerd
-    server: https://kubernetes.default.svc
-  project: demo
-  source:
-    path: ./linkerd
-    repoURL: https://github.com/ihcsim/linkerd2-gitops.git
-EOF
-
-kubectl apply -f ./linkerd-bootstrap.yaml
-
 argocd app sync linkerd-bootstrap
 ```
 
@@ -412,33 +324,9 @@ kubectl -n linkerd get secret,issuer,certificates
 Create the `linkerd` application:
 
 ```sh
-cat<<EOF > ./linkerd.yaml
-apiVersion: argoproj.io/v1alpha1
-kind: Application
-metadata:
-  name: linkerd
-  namespace: argocd
-spec:
-  project: demo
-  source:
-    chart: linkerd2
-    repoURL: https://helm.linkerd.io/stable
-    targetRevision: 2.8.0
-    helm:
-      parameters:
-      - name: global.identityTrustAnchorsPEM
-        value: |
-`kubectl -n linkerd get secret linkerd-trust-anchor -ojsonpath="{.data['tls\.crt']}" | base64 -d -w 0 - | sed 's/^/          /' -`
-      - name: identity.issuer.scheme
-        value: kubernetes.io/tls
-      - name: installNamespace
-        value: "false"
-  destination:
-    namespace: linkerd
-    server: https://kubernetes.default.svc
-EOF
+trust_anchor=`kubectl -n linkerd get secret linkerd-trust-anchor -ojsonpath="{.data['tls\.crt']}" | base64 -d -w 0 -`
 
-kubectl apply -f ./linkerd.yaml
+argocd app set linkerd --helm-set global.identityTrustAnchorsPEM=$trust_anchor
 
 argocd app sync linkerd
 ```
@@ -451,51 +339,11 @@ linkerd check
 linkerd check --proxy
 ```
 
-Commit the `linkerd` YAML files to Git:
-
-```sh
-git add ./linkerd-bootstrap.yaml ./linkerd.yaml && \
-git commit -m "add Linkerd 2.8.0 YAML" && \
-git push
-```
-
 ### Test with emojivoto
-
-Download the emojivoto YAML:
-
-```sh
-curl -Ls https://run.linkerd.io/emojivoto.yml > ./emojivoto/deploy.yaml
-```
-
-Commit the `emojivoto` resources to Git:
-
-```sh
-git add ./emojivoto && \
-git commit -m "add emojivoto resources" && \
-git push
-```
 
 Deploy emojivoto to test auto proxy injection:
 
 ```sh
-cat<<EOF > ./emojivoto.yaml
-apiVersion: argoproj.io/v1alpha1
-kind: Application
-metadata:
-  name: emojivoto
-  namespace: argocd
-spec:
-  project: demo
-  source:
-    path: ./emojivoto
-    repoURL: https://github.com/ihcsim/linkerd2-gitops
-  destination:
-    namespace: emojivoto
-    server: https://kubernetes.default.svc
-EOF
-
-kubectl apply -f emojivoto.yaml
-
 argocd app sync emojivoto
 ```
 
@@ -507,20 +355,12 @@ for deploy in "emoji" "vote-bot" "voting" "web" ; \
 done
 ```
 
-Commit the `emojivoto` YAML to Git:
-
-```sh
-git add ./emojivoto.yaml && \
-git commit -m "add emojivoto YAML" && \
-git push
-```
-
 ### Upgrade Linkerd to 2.8.1
 
 Upgrade the Linkerd version to 2.8.1:
 
 ```sh
-cat<<EOF > ./linkerd.yaml
+cat<<EOF > ./apps/linkerd.yaml
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -536,7 +376,6 @@ spec:
       parameters:
       - name: global.identityTrustAnchorsPEM
         value: |
-`kubectl -n linkerd get secret linkerd-trust-anchor -ojsonpath="{.data['tls\.crt']}" | base64 -d -w 0 - | sed 's/^/          /' -`
       - name: identity.issuer.scheme
         value: kubernetes.io/tls
       - name: installNamespace
@@ -545,26 +384,32 @@ spec:
     namespace: linkerd
     server: https://kubernetes.default.svc
 EOF
-
-kubectl apply -f ./linkerd.yaml
 ```
 
-Upgrade Linkerd using the Argo CD `sync` command:
+Commit and push this change to the Git server:
+
+```sh
+git add ./deploy/linkerd.yaml
+
+git commit -m "upgrade Linkerd to 2.8.1"
+
+git push git-server main
+```
+
+Synchronize Linkerd:
 
 ```sh
 argocd app sync linkerd
 
-linkerd version
-
 linkerd check
 
 linkerd check --proxy
+
+linkerd version
 ```
 
-Commit the version change to Git:
+### Clean up
 
 ```sh
-git add ./linkerd.yaml && \
-git commit -m "upgrade Linkerd to 2.8.1" && \
-git push
+argocd app delete main --cascade=true
 ```

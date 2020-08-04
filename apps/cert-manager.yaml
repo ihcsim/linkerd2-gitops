@@ -1,13 +1,18 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: cert-manager-bootstrap
+  name: cert-manager
   namespace: argocd
 spec:
   project: demo
   source:
-    path: ./cert-manager
-    repoURL: https://github.com/ihcsim/linkerd2-gitops
+    chart: cert-manager
+    repoURL: https://charts.jetstack.io
+    targetRevision: v0.15.0
+    helm:
+      parameters:
+      - name: installCRDs
+        value: "true"
   destination:
     namespace: cert-manager
     server: https://kubernetes.default.svc
@@ -19,3 +24,8 @@ spec:
     kind: CustomResourceDefinition
     jsonPointers:
     - /status
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cert-manager

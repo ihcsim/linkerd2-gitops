@@ -33,5 +33,6 @@ spec:
   sourceRepos:
   - https://charts.jetstack.io
   - https://github.com/ihcsim/linkerd2-gitops.git
+  - https://github.com/BuoyantIO/emojivoto.git
   - https://helm.linkerd.io/stable
   - https://kubernetes-charts.storage.googleapis.com

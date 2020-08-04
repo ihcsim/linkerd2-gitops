@@ -45,7 +45,7 @@ Deploy the Git server to the `scm` namespace:
 kubectl apply -f deploy/git-server
 ```
 
-This Git server that will be used to host repositories that Argo Cd will watch.
+This Git server will be used to host repositories that Argo CD will watch.
 
 > This runs the Git server as a [daemon](https://git-scm.com/book/en/v2/Git-on-the-Server-Git-Daemon)
 > with unauthenticated access to the Git data, over the `git` protocol.
@@ -66,8 +66,7 @@ kubectl -n scm exec "${git_server}" -- \
   git clone --bare https://github.com/ihcsim/linkerd2-gitops.git
 ```
 
-Argo CD will sync changes made to this repository with workloads on the
-cluster.
+Argo CD will sync changes made to this repository to the K8s cluster.
 
 Confirm that the remote repository is cloned successfully:
 
@@ -87,6 +86,9 @@ Update the local repo with a remote that points to the Git server:
 ```sh
 git remote add git-server git://localhost/linkerd2-gitops.git
 ```
+
+> Access to the Git server will be faciliated over port-forwarding.
+> Hence, the new remote points to localhost.
 
 Make sure that push works via port-forwarding:
 
@@ -149,48 +151,6 @@ Set up the `demo` project with the list of allowed cluster-scoped RBAC and
 remote repositories:
 
 ```sh
-cat<<EOF > ./project.yaml
-apiVersion: argoproj.io/v1alpha1
-kind: AppProject
-metadata:
-  name: demo
-  namespace: argocd
-spec:
-  clusterResourceWhitelist:
-  - group: admissionregistration.k8s.io
-    kind: MutatingWebhookConfiguration
-  - group: admissionregistration.k8s.io
-    kind: ValidatingWebhookConfiguration
-  - group: apiextensions.k8s.io
-    kind: CustomResourceDefinition
-  - group: apiregistration.k8s.io
-    kind: APIService
-  - group: ""
-    kind: Namespace
-  - group: policy
-    kind: PodSecurityPolicy
-  - group: rbac.authorization.k8s.io
-    kind: ClusterRole
-  - group: rbac.authorization.k8s.io
-    kind: ClusterRoleBinding
-  destinations:
-  - namespace: argocd
-    server: https://kubernetes.default.svc
-  - namespace: cert-manager
-    server: https://kubernetes.default.svc
-  - namespace: emojivoto
-    server: https://kubernetes.default.svc
-  - namespace: kube-system
-    server: https://kubernetes.default.svc
-  - namespace: linkerd
-    server: https://kubernetes.default.svc
-  sourceRepos:
-  - https://charts.jetstack.io
-  - https://github.com/ihcsim/linkerd2-gitops.git
-  - https://helm.linkerd.io/stable
-  - https://kubernetes-charts.storage.googleapis.com
-EOF
-
 kubectl apply -f ./project.yaml
 ```
 
@@ -231,22 +191,22 @@ Sync the `main` application:
 argocd app sync main
 ```
 
-Confirm that the synchronziation completed successfully:
-
 ![Sync the main application](img/dashboard-applications-main-sync.png)
+
+Note that only the `main` application will be synchronized.
 
 In the following steps, we will deploy each application by using Argo CD to
 synchronize them individually.
 
 ### Deploy cert-manager
 
-Deploy cert-manager:
+Synchronize the cert-manager application:
 
 ```sh
 argocd app sync cert-manager
 ```
 
-> Can't use cert-manager 0.16.0 with kubectl <1.19 and Helm 3.2
+> We can't use cert-manager 0.16.0 with kubectl <1.19 and Helm 3.2
 > See https://cert-manager.io/docs/installation/upgrading/upgrading-0.15-0.16/#helm
 
 Confirm that cert-manager is running:
@@ -257,9 +217,11 @@ for deploy in "cert-manager" "cert-manager-cainjector" "cert-manager-webhook"; \
 done
 ```
 
+![Sync cert-manager](img/dashboard-cert-manager-sync.png)
+
 ### Deploy sealed-secrets
 
-Deploy the sealed-secrets application:
+Synchronize the sealed-secrets application:
 
 ```sh
 argocd app sync sealed-secrets
@@ -271,9 +233,11 @@ Confirm that sealed-secrets is running:
 kubectl -n kube-system rollout status deploy/sealed-secrets
 ```
 
+![Sync sealed-secrets](img/dashboard-sealed-secrets-sync.png)
+
 ### Prepare the Linkerd mTLS trust anchor
 
-Create and encrypt the mTLS trust anchor offline:
+Create the mTLS trust anchor offline:
 
 ```sh
 mkdir deploy/linkerd
@@ -281,8 +245,19 @@ mkdir deploy/linkerd
 step certificate create identity.linkerd.cluster.local ./deploy/linkerd/sample-trust.crt ./deploy/linkerd/sample-trust.key \
   --profile root-ca \
   --no-password \
+  --not-after 43800h \
   --insecure
+```
 
+Inspect the details (encryption algorithm, expiry date etc.) of trust anchor:
+
+```sh
+step certificate inspect ./deploy/linkerd/sample-trust.crt
+```
+
+Create an encrypted the trust-anchor secret:
+
+```sh
 kubectl -n linkerd create secret tls linkerd-trust-anchor \
   --cert ./deploy/linkerd/sample-trust.crt \
   --key ./deploy/linkerd/sample-trust.key \
@@ -295,7 +270,16 @@ kubectl patch -f - \
   --local -oyaml > ./deploy/linkerd/trust-anchor.yaml
 ```
 
-Commit and push the encrypted trust anchor secret to the Git server:
+This will overwrite the existing `SealedSecret` resource in your local
+`./deploy/linkerd/trust-anchor.yaml`.
+
+Confirm that only the `spec.encryptedData` is changed:
+
+```sh
+git diff ./deploy/linkerd/trust-anchor.yaml
+```
+
+Commit and push the new trust anchor secret to the Git server:
 
 ```sh
 git add ./deploy/linkerd/trust-anchor.yaml

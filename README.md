@@ -45,7 +45,7 @@ Clone a local copy of the example repository.
 git clone https://github.com/ihcsim/linkerd2-gitops.git
 ```
 
-Add a new remote endpoint to the *local repository* that points to the
+Add a new remote endpoint to the repository to point to the
 in-cluster Git server that will be created in the next section:
 
 ```sh
@@ -292,7 +292,7 @@ git push git-server main
 Make sure the commit is pushed to the Git server:
 
 ```sh
-kubectl -n scm exec "${git-server}" -- git --git-dir linkerd2-gitops.git log -1
+kubectl -n scm exec "${git_server}" -- git --git-dir linkerd2-gitops.git log -1
 ```
 
 ### Bootstrap the mTLS resources
@@ -326,11 +326,13 @@ trust_anchor=`kubectl -n linkerd get secret linkerd-trust-anchor -ojsonpath="{.d
 Confirm that it matches the new trust anchor we created previously:
 
 ```sh
-echo "${trust_anchor}" | step certificate inspect -
+diff \
+  <(echo "${trust_anchor}" | step certificate inspect -) \
+  <(step certificate inspect deploy/linkerd/sample-trust.crt)
 ```
 
 The next step involves passing the new trust anchor into the `linkerd`
-application as a Helm parameter:
+application as a Helm parameter.
 
 Before the first synchronization, the `global.identityTrustAnchorsPEM` parameter will appear to be empty:
 
@@ -375,7 +377,7 @@ At this point, the `main` application will go out-of-sync due to a mismatch in
 the live trust anchor and that defined in the YAML manifest in the
 `./apps/linkerd.yaml` file.
 
-The next step will involve manually updating the YAML manifest and push it to
+The next step will involve manually updating the YAML manifest and pushing it to
 the Git server.
 
 Use your editor to assign the the value of `${trust_anchor}` to the
@@ -385,6 +387,27 @@ Confirm that only the `spec.source.helm.parameters.value` field is changed:
 
 ```sh
 git diff ./apps/linkerd.yaml
+
+diff --git a/apps/linkerd.yaml b/apps/linkerd.yaml
+index 40fe82e..393f323 100644
+--- a/apps/linkerd.yaml
++++ b/apps/linkerd.yaml
+@@ -14,6 +14,15 @@ spec:
+       - name: global.identityTrustAnchorsPEM
+         value: |
+           -----BEGIN CERTIFICATE-----
++          MIIBljCCATygAwIBAgIRALsYagZPxJwMnLUD0mK9d0swCgYIKoZIzj0EAwIwKTEn
++          MCUGA1UEAxMeaWRlbnRpdHkubGlua2VyZC5jbHVzdGVyLmxvY2FsMB4XDTIwMDgw
++          NDIzMjM0MVoXDTI1MDgwMzIzMjM0MVowKTEnMCUGA1UEAxMeaWRlbnRpdHkubGlu
++          a2VyZC5jbHVzdGVyLmxvY2FsMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEEFu6
++          0zXNgb0dq+pp0FPYbdKRiAryWx3x5fnPI3I/CztN5F7lBmlZSs3L6I2oaewOdNAn
++          ZU9YOXQhgteFzlVLw6NFMEMwDgYDVR0PAQH/BAQDAgEGMBIGA1UdEwEB/wQIMAYB
++          Af8CAQEwHQYDVR0OBBYEFGwTrzmzEC0PVIwEfIGKJWzNDKxGMAoGCCqGSM49BAMC
++          A0gAMEUCIAXs+x5rAYCIJk0AXGW6g/MAQUCgrhqmBsZ7WenaIsn6AiEA1+B0xxBZ
++          QjTmk4FuX64Hx8pO1rlc4I3/a3Uq1olYL4Y=
+           -----END CERTIFICATE-----
+       - name: identity.issuer.scheme
+         value: kubernetes.io/tls
 ```
 
 Commit and push the changes to the Git server:

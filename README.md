@@ -37,11 +37,31 @@ Create a `kind` cluster named `linkerd`:
 kind create cluster --name=linkerd
 ```
 
+### Set up the local repository
+
+Clone a local copy of the example repository.
+
+```sh
+git clone https://github.com/ihcsim/linkerd2-gitops.git
+```
+
+Add a new remote endpoint to the *local repository* that points to the
+in-cluster Git server that will be created in the next section:
+
+```sh
+git remote add git-server git://localhost/linkerd2-gitops.git
+```
+
+> Access to the remote Git server will be faciliated over port-forwarding.
+> Hence, the new remote endpoint refers to the localhost.
+
 ### Set up a Git server
 
 Deploy the Git server to the `scm` namespace:
 
 ```sh
+cd ./linkerd2-gitopts
+
 kubectl apply -f deploy/git-server
 ```
 
@@ -69,40 +89,18 @@ kubectl -n scm exec "${git_server}" -- \
 In later steps, changes made to this repository will be sync-ed by Argo CD to
 the K8s cluster.
 
-Confirm that the remote repository is cloned successfully:
-
-```sh
-kubectl -n scm exec "${git_server}" -- ls -al /git/linkerd2-gitops.git
-```
-
-### Set up the local repository
-
-Clone a local copy of the example repository.
-
-```sh
-git clone https://github.com/ihcsim/linkerd2-gitops.git
-```
-
-During the upgrade steps, version changes will be commited to this local
-repository, before being pushed to the remote repository.
-
-Add a new remote endpoint that points to the in-cluster Git server:
-
-```sh
-git remote add git-server git://localhost/linkerd2-gitops.git
-```
-
-> Access to the Git server will be faciliated over port-forwarding.
-> Hence, the new remote endpoint refers to the localhost.
-
 Make sure that push works via port-forwarding:
 
 ```sh
 kubectl -n scm port-forward "${git_server}" 9418  &
 
-cd ./linkerd2-gitopts
-
 git push git-server main
+```
+
+Confirm that the remote repository is cloned successfully:
+
+```sh
+kubectl -n scm exec "${git_server}" -- ls -al /git/linkerd2-gitops.git
 ```
 
 ### Deploy Argo CD 1.6.1

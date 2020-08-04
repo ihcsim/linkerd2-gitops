@@ -10,4 +10,4 @@ spec:
   project: demo
   source:
     path: ./deploy/linkerd
-    repoURL: git://git-server/linkerd2-gitops.git
+    repoURL: git://git-server.scm:9418/linkerd2-gitops.git

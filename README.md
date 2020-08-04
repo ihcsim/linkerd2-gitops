@@ -341,7 +341,8 @@ argocd app get linkerd -ojson | \
 
 ![Empty trust anchor](img/dashboard-trust-anchor-empty.png)
 
-Override the `global.identityTrustAnchorsPEM` parameter:
+Override the `global.identityTrustAnchorsPEM` parameter in the `linkerd`
+application with the value of `${trust_anchor}`.
 
 ```sh
 argocd app set linkerd --helm-set global.identityTrustAnchorsPEM=${trust_anchor}
@@ -370,9 +371,33 @@ linkerd check
 
 ![Sync Linkerd](img/dashboard-linkerd-sync.png)
 
-> Note that after uploading the new trust anchor, the `main` application may
-> appear out-of-sync. Re-running `argocd app sync main` will synchronize the
-> resources again.
+At this point, the `main` application will go out-of-sync due to a mismatch in
+the live trust anchor and that defined in the YAML manifest in the
+`./apps/linkerd.yaml` file.
+
+The next step will involve manually updating the YAML manifest and push it to
+the Git server.
+
+Use your editor to assign the the value of `${trust_anchor}` to the
+`global.identityTrustAnchorsPEM` parameter in the `./apps/linkerd.yaml` file.
+
+Confirm that only the `spec.source.helm.parameters.value` field is changed:
+
+```sh
+git diff ./apps/linkerd.yaml
+```
+
+Commit and push the changes to the Git server:
+
+```sh
+git add ./apps/linkerd.yaml
+
+git commit -m "set global.identityTrustAnchorsPEM parameter"
+
+git push git-server main
+```
+
+Re-run `argocd app sync main` to synchronize the `main` application.
 
 ### Test with emojivoto
 
@@ -394,33 +419,11 @@ done
 
 ### Upgrade Linkerd to 2.8.1
 
-Upgrade the Linkerd version to 2.8.1:
+Use your editor to change the `spec.source.targetRevision` field to `2.8.1` in
+the `./apps/linkerd.yaml` file:
 
 ```sh
-cat<<EOF > ./apps/linkerd.yaml
-apiVersion: argoproj.io/v1alpha1
-kind: Application
-metadata:
-  name: linkerd
-  namespace: argocd
-spec:
-  project: demo
-  source:
-    chart: linkerd2
-    repoURL: https://helm.linkerd.io/stable
-    targetRevision: 2.8.1
-    helm:
-      parameters:
-      - name: global.identityTrustAnchorsPEM
-        value: |
-      - name: identity.issuer.scheme
-        value: kubernetes.io/tls
-      - name: installNamespace
-        value: "false"
-  destination:
-    namespace: linkerd
-    server: https://kubernetes.default.svc
-EOF
+git diff ./apps/linkerd.yaml
 ```
 
 Commit and push this change to the Git server:

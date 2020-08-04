@@ -284,16 +284,26 @@ Commit and push the new trust anchor secret to the Git server:
 ```sh
 git add ./deploy/linkerd/trust-anchor.yaml
 
-git commit -m "add new trust anchor"
+git commit -m "update encrypted trust anchor"
 
 git push git-server main
 ```
 
-Deploy the `linkerd-bootstrap` application:
+Make sure the commit is pushed to the Git server:
+
+```sh
+kubectl -n scm exec "${git-server}" -- git --git-dir linkerd2-gitops.git log -1
+```
+
+### Bootstrap the mTLS resources
+
+Synchronize the `linkerd-bootstrap` application:
 
 ```sh
 argocd app sync linkerd-bootstrap
 ```
+
+![Sync linkerd-bootstrap](img/dashboard-linkerd-bootstrap-sync.png)
 
 > If the issuer and certificate resources appear in a degraded state, it's
 > likely that the sealed-secrets controller failed to decrypt the sealed trust
@@ -305,13 +315,50 @@ Confirm that all the mTLS secrets are created:
 kubectl -n linkerd get secret,issuer,certificates
 ```
 
-Create the `linkerd` application:
+### Deploy Linkerd
+
+Retrieve the trust anchor from the live secret resource:
 
 ```sh
 trust_anchor=`kubectl -n linkerd get secret linkerd-trust-anchor -ojsonpath="{.data['tls\.crt']}" | base64 -d -w 0 -`
+```
 
-argocd app set linkerd --helm-set global.identityTrustAnchorsPEM=$trust_anchor
+Confirm that it matches the new trust anchor we created previously:
 
+```sh
+echo "${trust_anchor}" | step certificate inspect -
+```
+
+The next step involves passing the new trust anchor into the `linkerd`
+application as a Helm parameter:
+
+Before the first synchronization, the `global.identityTrustAnchorsPEM` parameter will appear to be empty:
+
+```sh
+argocd app get linkerd -ojson | \
+  jq -r '.spec.source.helm.parameters[] | select(.name == "global.identityTrustAnchorsPEM") | .value'
+```
+
+![Empty trust anchor](img/dashboard-trust-anchor-empty.png)
+
+Override the `global.identityTrustAnchorsPEM` parameter:
+
+```sh
+argocd app set linkerd --helm-set global.identityTrustAnchorsPEM=${trust_anchor}
+```
+
+Confirm that the new trust anchor is uploaded to Argo CD:
+
+```sh
+argocd app get linkerd -ojson | \
+  jq -r '.spec.source.helm.parameters[] | select(.name == "global.identityTrustAnchorsPEM") | .value'
+```
+
+![Override trust anchor](img/dashboard-trust-anchor-override.png)
+
+Synchronize the `linkerd` application:
+
+```sh
 argocd app sync linkerd
 ```
 
@@ -319,9 +366,13 @@ Check that Linkerd is ready:
 
 ```sh
 linkerd check
-
-linkerd check --proxy
 ```
+
+![Sync Linkerd](img/dashboard-linkerd-sync.png)
+
+> Note that after uploading the new trust anchor, the `main` application may
+> appear out-of-sync. Re-running `argocd app sync main` will synchronize the
+> resources again.
 
 ### Test with emojivoto
 
@@ -338,6 +389,8 @@ for deploy in "emoji" "vote-bot" "voting" "web" ; \
   do kubectl -n emojivoto rollout status deploy/${deploy}; \
 done
 ```
+
+![Sync emojivoto](img/dashboard-emojivoto-sync.png)
 
 ### Upgrade Linkerd to 2.8.1
 

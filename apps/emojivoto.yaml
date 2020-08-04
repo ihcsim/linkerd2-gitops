@@ -11,8 +11,3 @@ spec:
   source:
     path: deploy/emojivoto
     repoURL: https://github.com/ihcsim/linkerd2-gitops.git
----
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: emojivoto

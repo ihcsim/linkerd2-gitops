@@ -39,7 +39,7 @@ kind create cluster --name=linkerd
 
 ### Set up the local repository
 
-Clone a local copy of the example repository.
+Clone the example repository to a local folder:
 
 ```sh
 git clone https://github.com/ihcsim/linkerd2-gitops.git
@@ -326,15 +326,13 @@ trust_anchor=`kubectl -n linkerd get secret linkerd-trust-anchor -ojsonpath="{.d
 Confirm that it matches the new trust anchor we created previously:
 
 ```sh
-diff \
+diff -b \
   <(echo "${trust_anchor}" | step certificate inspect -) \
   <(step certificate inspect deploy/linkerd/sample-trust.crt)
 ```
 
-The next step involves passing the new trust anchor into the `linkerd`
-application as a Helm parameter.
-
-Before the first synchronization, the `global.identityTrustAnchorsPEM` parameter will appear to be empty:
+The default value of the `global.identityTrustAnchorsPEM` parameter is an empty
+placeholder string:
 
 ```sh
 argocd app get linkerd -ojson | \
@@ -343,14 +341,34 @@ argocd app get linkerd -ojson | \
 
 ![Empty trust anchor](img/dashboard-trust-anchor-empty.png)
 
-Override the `global.identityTrustAnchorsPEM` parameter in the `linkerd`
-application with the value of `${trust_anchor}`.
+We will override this parameter in the `linkerd` application with the value of
+`${trust_anchor}`.
+
+Locate the `global.identityTrustAnchorsPEM` variable in the `./apps/linkerd.yaml` file, and set its `value` to `${trust_anchor}`.
+
+Confirm that only the `spec.source.helm.parameters.value` field is changed:
 
 ```sh
-argocd app set linkerd --helm-set global.identityTrustAnchorsPEM=${trust_anchor}
+git diff ./apps/linkerd.yaml
 ```
 
-Confirm that the new trust anchor is uploaded to Argo CD:
+Commit and push the changes to the Git server:
+
+```sh
+git add ./apps/linkerd.yaml
+
+git commit -m "set global.identityTrustAnchorsPEM parameter"
+
+git push git-server main
+```
+
+Synchronize the `main` application:
+
+```sh
+argocd app sync main
+```
+
+Confirm that the new trust anchor is picked up by the `linkerd` application:
 
 ```sh
 argocd app get linkerd -ojson | \
@@ -372,55 +390,6 @@ linkerd check
 ```
 
 ![Sync Linkerd](img/dashboard-linkerd-sync.png)
-
-At this point, the `main` application will go out-of-sync due to a mismatch in
-the live trust anchor and that defined in the YAML manifest in the
-`./apps/linkerd.yaml` file.
-
-The next step will involve manually updating the YAML manifest and pushing it to
-the Git server.
-
-Use your editor to assign the the value of `${trust_anchor}` to the
-`global.identityTrustAnchorsPEM` parameter in the `./apps/linkerd.yaml` file.
-
-Confirm that only the `spec.source.helm.parameters.value` field is changed:
-
-```sh
-git diff ./apps/linkerd.yaml
-
-diff --git a/apps/linkerd.yaml b/apps/linkerd.yaml
-index 40fe82e..393f323 100644
---- a/apps/linkerd.yaml
-+++ b/apps/linkerd.yaml
-@@ -14,6 +14,15 @@ spec:
-       - name: global.identityTrustAnchorsPEM
-         value: |
-           -----BEGIN CERTIFICATE-----
-+          MIIBljCCATygAwIBAgIRALsYagZPxJwMnLUD0mK9d0swCgYIKoZIzj0EAwIwKTEn
-+          MCUGA1UEAxMeaWRlbnRpdHkubGlua2VyZC5jbHVzdGVyLmxvY2FsMB4XDTIwMDgw
-+          NDIzMjM0MVoXDTI1MDgwMzIzMjM0MVowKTEnMCUGA1UEAxMeaWRlbnRpdHkubGlu
-+          a2VyZC5jbHVzdGVyLmxvY2FsMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEEFu6
-+          0zXNgb0dq+pp0FPYbdKRiAryWx3x5fnPI3I/CztN5F7lBmlZSs3L6I2oaewOdNAn
-+          ZU9YOXQhgteFzlVLw6NFMEMwDgYDVR0PAQH/BAQDAgEGMBIGA1UdEwEB/wQIMAYB
-+          Af8CAQEwHQYDVR0OBBYEFGwTrzmzEC0PVIwEfIGKJWzNDKxGMAoGCCqGSM49BAMC
-+          A0gAMEUCIAXs+x5rAYCIJk0AXGW6g/MAQUCgrhqmBsZ7WenaIsn6AiEA1+B0xxBZ
-+          QjTmk4FuX64Hx8pO1rlc4I3/a3Uq1olYL4Y=
-           -----END CERTIFICATE-----
-       - name: identity.issuer.scheme
-         value: kubernetes.io/tls
-```
-
-Commit and push the changes to the Git server:
-
-```sh
-git add ./apps/linkerd.yaml
-
-git commit -m "set global.identityTrustAnchorsPEM parameter"
-
-git push git-server main
-```
-
-Re-run `argocd app sync main` to synchronize the `main` application.
 
 ### Test with emojivoto
 
@@ -445,6 +414,8 @@ done
 Use your editor to change the `spec.source.targetRevision` field to `2.8.1` in
 the `./apps/linkerd.yaml` file:
 
+Confirm that only the `targetRevision` field is changed:
+
 ```sh
 git diff ./apps/linkerd.yaml
 ```
@@ -452,26 +423,40 @@ git diff ./apps/linkerd.yaml
 Commit and push this change to the Git server:
 
 ```sh
-git add ./deploy/linkerd.yaml
+git add ./apps/linkerd.yaml
 
 git commit -m "upgrade Linkerd to 2.8.1"
 
 git push git-server main
 ```
 
-Synchronize Linkerd:
+Synchronize the `main` application:
+
+```sh
+argocd app sync main
+```
+
+Synchronize the `linkerd` application:
 
 ```sh
 argocd app sync linkerd
+```
 
+Confirm that the upgrade completed successfully:
+
+```sh
 linkerd check
+```
 
-linkerd check --proxy
+Confirm the new version of the control plane:
 
+```sh
 linkerd version
 ```
 
 ### Clean up
+
+All the applications can be removed by removing the `main` application:
 
 ```sh
 argocd app delete main --cascade=true

@@ -19,13 +19,14 @@ The scripts are tested with the following software:
   auto mesh applications
 * Securely store the mTLS trust anchor key/cert with offline encryption and
   runtime auto-decryption using sealed-secrets
-* Let cert-manager manage the mTLS issuer key/cert assets
+* Use cert-manager to manage the mTLS issuer key/cert resources
 * Utilize Argo CD [projects](https://argoproj.github.io/argo-cd/user-guide/projects/)
   to manage bootstrap dependencies and limit access to servers, namespaces and
   resources
 * Uses Argo CD
   [_app of apps_ pattern](https://argoproj.github.io/argo-cd/operator-manual/cluster-bootstrapping/#app-of-apps-pattern)
-  to manage application declarative resources
+  to declaratively manage a group of
+  [application](https://argoproj.github.io/argo-cd/operator-manual/declarative-setup/#applications)
 
 ## Getting Started
 
@@ -37,7 +38,7 @@ Create a `kind` cluster named `linkerd`:
 kind create cluster --name=linkerd
 ```
 
-### Set up the local repository
+### Clone the example repository
 
 Clone the example repository to a local folder:
 
@@ -46,16 +47,17 @@ git clone https://github.com/ihcsim/linkerd2-gitops.git
 ```
 
 Add a new remote endpoint to the repository to point to the
-in-cluster Git server that will be created in the next section:
+in-cluster Git server, which will be created in the next section:
 
 ```sh
 git remote add git-server git://localhost/linkerd2-gitops.git
 ```
 
 > Access to the remote Git server will be faciliated over port-forwarding.
+>
 > Hence, the new remote endpoint refers to the localhost.
 
-### Set up a Git server
+### Set up the Git server
 
 Deploy the Git server to the `scm` namespace:
 
@@ -67,8 +69,10 @@ kubectl apply -f deploy/git-server
 
 This Git server will be used to host repositories that Argo CD will watch.
 
-> This runs the Git server as a [daemon](https://git-scm.com/book/en/v2/Git-on-the-Server-Git-Daemon)
+> The Git server is run as a
+> [daemon](https://git-scm.com/book/en/v2/Git-on-the-Server-Git-Daemon)
 > with unauthenticated access to the Git data, over the `git` protocol.
+>
 > This setup is not recommended for production usage.
 
 Confirm that the Git server is healthy:
@@ -86,10 +90,11 @@ kubectl -n scm exec "${git_server}" -- \
   git clone --bare https://github.com/ihcsim/linkerd2-gitops.git
 ```
 
-In later steps, changes made to this repository will be sync-ed by Argo CD to
-the K8s cluster.
+In later steps, changes made to this remote repository will be deployed to the
+the K8s cluster by Argo CD.
 
-Make sure that push works via port-forwarding:
+Make sure that you can push from the local example repository to
+the remote repository via port-forwarding:
 
 ```sh
 kubectl -n scm port-forward "${git_server}" 9418  &
@@ -134,8 +139,9 @@ default `admin` username and
 [password](https://argoproj.github.io/argo-cd/getting_started/#4-login-using-the-cli).
 
 > The default admin password is the auto-generated name of the Argo CD API
-> server pod. You can use the `argocd account update-password` command to
-> change it.
+> server pod.
+>
+> You can use the `argocd account update-password` command to change it.
 
 Authenticate the Argo CD CLI:
 
@@ -150,8 +156,7 @@ argocd login 127.0.0.1:8080 \
 
 #### Configure project access and permissions
 
-Set up the `demo` project with the list of allowed cluster-scoped RBAC and
-remote repositories:
+Set up the `demo` project:
 
 ```sh
 kubectl apply -f ./project.yaml
@@ -159,7 +164,8 @@ kubectl apply -f ./project.yaml
 
 > The `demo` project is restricted to deploying resources to the same cluster
 > that Argo CD is on.
-> To register separate remote clusters, use the `argocd cluster add` command.
+>
+> It defines the list of cluster-scoped resources required to install Linkerd.
 
 Confirm that the project is deployed correctly:
 
@@ -195,9 +201,10 @@ argocd app sync main
 
 ![Sync the main application](img/dashboard-applications-main-sync.png)
 
-Note that only the `main` application will be synchronized.
+Notice that only the `main` application is synchronized.
 
-In the following steps, we will synchronize each application individually.
+In the following steps, we will synchronize the remaining applications
+individually.
 
 ### Deploy cert-manager
 
@@ -208,6 +215,7 @@ argocd app sync cert-manager
 ```
 
 > We can't use cert-manager 0.16.0 with kubectl <1.19 and Helm 3.2.
+>
 > See https://cert-manager.io/docs/installation/upgrading/upgrading-0.15-0.16/#helm
 
 Confirm that cert-manager is running:
@@ -238,7 +246,7 @@ kubectl -n kube-system rollout status deploy/sealed-secrets
 
 ### Prepare the Linkerd mTLS trust anchor
 
-Create the mTLS trust anchor offline:
+Create a new mTLS trust anchor key/cert pair:
 
 ```sh
 step certificate create identity.linkerd.cluster.local ./deploy/linkerd/sample-trust.crt ./deploy/linkerd/sample-trust.key \
@@ -248,7 +256,7 @@ step certificate create identity.linkerd.cluster.local ./deploy/linkerd/sample-t
   --insecure
 ```
 
-Inspect the details (encryption algorithm, expiry date etc.) of the new trust
+Confirm the details (encryption algorithm, expiry date etc.) of the new trust
 anchor:
 
 ```sh
@@ -271,7 +279,8 @@ kubectl patch -f - \
 ```
 
 This will overwrite the existing `SealedSecret` resource in your local
-`./deploy/linkerd/trust-anchor.yaml`.
+`./deploy/linkerd/trust-anchor.yaml`. We will push this change to the
+in-cluster Git server.
 
 Confirm that only the `spec.encryptedData` is changed:
 
@@ -279,7 +288,7 @@ Confirm that only the `spec.encryptedData` is changed:
 git diff ./deploy/linkerd/trust-anchor.yaml
 ```
 
-Commit and push the new trust anchor secret to the Git server:
+Commit and push the new trust anchor secret:
 
 ```sh
 git add ./deploy/linkerd/trust-anchor.yaml
@@ -289,7 +298,7 @@ git commit -m "update encrypted trust anchor"
 git push git-server main
 ```
 
-Make sure the commit is pushed to the Git server:
+Make sure the commit is successfully pushed to the Git server:
 
 ```sh
 kubectl -n scm exec "${git_server}" -- git --git-dir linkerd2-gitops.git log -1
@@ -305,7 +314,9 @@ argocd app sync linkerd-bootstrap
 
 > If the issuer and certificate resources appear in a degraded state, it's
 > likely that the sealed-secrets controller failed to decrypt the sealed trust
-> anchor. Check the sealed-secrets controller for error logs.
+> anchor.
+>
+> Check the sealed-secrets controller for error logs.
 
 Confirm that all the mTLS secrets are created:
 
